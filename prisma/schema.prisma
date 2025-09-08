@@ -1,0 +1,77 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Produto {
+  id              Int               @id @default(autoincrement())
+  nome            String
+  preco           Float
+  estoque         Int
+  itensPedidos    ItensPedido[]
+  movimentacoes   MovimentacaoEstoque[]
+}
+
+model Cliente {
+  id              Int               @id @default(autoincrement())
+  nome            String
+  email           String            @unique
+  pedidos         Pedido[]
+}
+
+model Pedido {
+  id              Int               @id @default(autoincrement())
+  data            DateTime          @default(now())
+  status          StatusPedido      @default(AGUARDANDO_PAGAMENTO)
+  valorTotal      Float
+  cliente         Cliente           @relation(fields: [clienteId], references: [id])
+  clienteId       Int
+  itens           ItensPedido[]
+  pagamentos      Pagamento[]
+}
+
+model ItensPedido {
+  id              Int               @id @default(autoincrement())
+  quantidade      Int
+  precoUnitario   Float
+  pedido          Pedido            @relation(fields: [pedidoId], references: [id])
+  pedidoId        Int
+  produto         Produto           @relation(fields: [produtoId], references: [id])
+  produtoId       Int
+}
+
+model Pagamento {
+  id              Int               @id @default(autoincrement())
+  metodo          String
+  valor           Float
+  sucesso         Boolean
+  pedido          Pedido            @relation(fields: [pedidoId], references: [id])
+  pedidoId        Int
+}
+
+model MovimentacaoEstoque {
+  id              Int               @id @default(autoincrement())
+  produto         Produto           @relation(fields: [produtoId], references: [id])
+  produtoId       Int
+  tipo            TipoMovimentacao
+  quantidade      Int
+  data            DateTime          @default(now())
+}
+
+enum StatusPedido {
+  AGUARDANDO_PAGAMENTO
+  FALHA_NO_PAGAMENTO
+  PAGO
+  CANCELADO
+}
+
+enum TipoMovimentacao {
+  ENTRADA
+  SAIDA
+}
