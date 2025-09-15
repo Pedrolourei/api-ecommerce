@@ -1,4 +1,3 @@
-// server.js
 const express = require('express');
 const { PrismaClient } = require('@prisma/client');
 const prisma = new PrismaClient();
@@ -7,24 +6,7 @@ const PORT = 3000;
 
 app.use(express.json());
 
-
-// --- Rotas de Clientes ---
-app.post('/clientes', async (req, res) => {
-  const { nome, email } = req.body;
-  if (!nome || !email) {
-    return res.status(400).json({ mensagem: 'Nome e email são obrigatórios.' });
-  }
-  try {
-    const novoCliente = await prisma.cliente.create({
-      data: { nome, email }
-    });
-    res.status(201).json(novoCliente);
-  } catch (error) {
-    res.status(500).json({ mensagem: 'Erro ao cadastrar cliente.' });
-  }
-});
-
-// --- Rotas de Produtos (Atualizadas) ---
+// --- Rotas de Produtos ---
 // GET /produtos: Lista todos os produtos
 app.get('/produtos', async (req, res) => {
   const produtos = await prisma.produto.findMany();
@@ -68,9 +50,9 @@ app.put('/produtos/:id', async (req, res) => {
   }
 });
 
-// NOVO ENDPOINT: Atualiza o estoque do produto
+// Atualiza o estoque do produto
 app.put('/produtos/estoque/:id', async (req, res) => {
-  const { quantidade, tipo } = req.body; // tipo: 'ENTRADA' ou 'SAIDA'
+  const { quantidade, tipo } = req.body;
   if (!quantidade || !tipo) {
     return res.status(400).json({ mensagem: 'Quantidade e tipo são obrigatórios.' });
   }
@@ -116,7 +98,35 @@ app.delete('/produtos/:id', async (req, res) => {
   }
 });
 
-// --- Rotas de Pedidos (Atualizadas) ---
+// --- Rotas de Clientes ---
+app.post('/clientes', async (req, res) => {
+  const { nome, email } = req.body;
+  if (!nome || !email) {
+    return res.status(400).json({ mensagem: 'Nome e email são obrigatórios.' });
+  }
+  try {
+    const novoCliente = await prisma.cliente.create({
+      data: { nome, email }
+    });
+    res.status(201).json(novoCliente);
+  } catch (error) {
+    res.status(500).json({ mensagem: 'Erro ao cadastrar cliente.' });
+  }
+});
+
+app.get('/clientes/:clienteId/pedidos', async (req, res) => {
+  try {
+    const pedidosCliente = await prisma.pedido.findMany({
+      where: { clienteId: parseInt(req.params.clienteId) },
+      include: { itens: { include: { produto: true } } }
+    });
+    res.status(200).json(pedidosCliente);
+  } catch (error) {
+    res.status(500).json({ mensagem: 'Erro ao buscar pedidos do cliente.' });
+  }
+});
+
+// --- Rotas de Pedidos ---
 // GET /pedidos: Lista todos os pedidos
 app.get('/pedidos', async (req, res) => {
   const pedidos = await prisma.pedido.findMany({
@@ -141,19 +151,6 @@ app.get('/pedidos/:id', async (req, res) => {
   }
 });
 
-// GET /clientes/:clienteId/pedidos: Busca pedidos de um cliente
-app.get('/clientes/:clienteId/pedidos', async (req, res) => {
-  try {
-    const pedidosCliente = await prisma.pedido.findMany({
-      where: { clienteId: parseInt(req.params.clienteId) },
-      include: { itens: { include: { produto: true } } }
-    });
-    res.status(200).json(pedidosCliente);
-  } catch (error) {
-    res.status(500).json({ mensagem: 'Erro ao buscar pedidos do cliente.' });
-  }
-});
-
 // POST /pedidos: Cria um novo pedido (com cliente)
 app.post('/pedidos', async (req, res) => {
   const { clienteId, itens } = req.body;
@@ -162,7 +159,6 @@ app.post('/pedidos', async (req, res) => {
   }
   
   try {
-    // Transação para garantir a atomicidade
     const resultado = await prisma.$transaction(async (prisma) => {
       let valorTotal = 0;
       const itensComDetalhes = [];
@@ -192,7 +188,6 @@ app.post('/pedidos', async (req, res) => {
         include: { itens: true }
       });
       
-      // Decrementar estoque somente se o pedido for criado com sucesso
       for (const item of itens) {
         await prisma.produto.update({
           where: { id: item.produtoId },
@@ -209,7 +204,9 @@ app.post('/pedidos', async (req, res) => {
   }
 });
 
-// NOVO ENDPOINT: Confirmação de pagamento do pedido
+// --- NOVOS ENDPOINTS ---
+
+// Endpoint para confirmar o pagamento do pedido
 app.post('/pedidos/:id/pagamento', async (req, res) => {
   const { metodos } = req.body; // Ex: [{ metodo: 'CARTAO', valor: 100 }, { metodo: 'PIX', valor: 50 }]
   if (!metodos || !Array.isArray(metodos) || metodos.length === 0) {
@@ -222,13 +219,12 @@ app.post('/pedidos/:id/pagamento', async (req, res) => {
       return res.status(404).json({ mensagem: 'Pedido não encontrado.' });
     }
     
-    // Simulação da lógica de pagamento
-    const pagamentoFalhou = Math.random() < 0.2; // 20% de chance de falha
-    
+    // Simulação da lógica de pagamento: 20% de chance de falha
+    const pagamentoFalhou = Math.random() < 0.2;
     const statusFinal = pagamentoFalhou ? 'FALHA_NO_PAGAMENTO' : 'PAGO';
 
     await prisma.$transaction(async (prisma) => {
-      // Cria registros de pagamento
+      // Cria registros de pagamento na tabela `Pagamento`
       for (const metodo of metodos) {
         await prisma.pagamento.create({
           data: {
@@ -246,7 +242,7 @@ app.post('/pedidos/:id/pagamento', async (req, res) => {
         data: { status: statusFinal }
       });
 
-      // Se falhou, reverte o estoque
+      // Se o pagamento falhou, o pedido é cancelado e o estoque é revertido
       if (pagamentoFalhou) {
         const itensPedido = await prisma.itensPedido.findMany({ where: { pedidoId: pedido.id } });
         for (const item of itensPedido) {
@@ -254,9 +250,9 @@ app.post('/pedidos/:id/pagamento', async (req, res) => {
             where: { id: item.produtoId },
             data: { estoque: { increment: item.quantidade } }
           });
-          // Opcional: registrar a devolução no histórico de movimentação
         }
       }
+      
       return pedidoAtualizado;
     });
 
@@ -270,8 +266,7 @@ app.post('/pedidos/:id/pagamento', async (req, res) => {
   }
 });
 
-
-// NOVO ENDPOINT: Busca métodos de pagamento de um pedido
+// Endpoint para buscar os métodos de pagamento de um pedido
 app.get('/pedidos/:id/pagamentos', async (req, res) => {
     try {
         const pagamentos = await prisma.pagamento.findMany({
