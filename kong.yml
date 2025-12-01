@@ -1,0 +1,58 @@
+_format_version: "3.0"
+
+services:
+  - name: users-service
+    url: http://users-service:3001
+    routes:
+      - name: users-routes
+        paths:
+          - /users
+        strip_path: false  # <== IMPORTANTE: Mantém o /users na URL
+
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 10
+          policy: local
+
+  - name: products-service
+    url: http://products-service:3002
+    routes:
+      - name: products-routes
+        paths:
+          - /products
+        strip_path: false  # <== IMPORTANTE
+
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 10
+          policy: local
+
+  - name: orders-service
+    url: http://orders-service:3003
+    routes:
+      - name: orders-routes
+        paths:
+          - /orders
+        strip_path: false  # <== IMPORTANTE
+
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 10
+          policy: local
+
+  - name: payments-service
+    url: http://payments-service:3004
+    routes:
+      - name: payments-routes
+        paths:
+          - /payments
+        strip_path: false  # <== IMPORTANTE
+
+    plugins:
+      - name: rate-limiting
+        config:
+          minute: 10
+          policy: local

@@ -1,0 +1,38 @@
+// orders-service/prisma/schema.prisma
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  // A URL do Atlas já deve estar correta
+  url      = env("DATABASE_URL")
+}
+
+model Order {
+  id         String      @id @default(auto()) @map("_id") @db.ObjectId
+  userId     String      // ID do usuário (do user-service)
+  totalValue Float
+  status     OrderStatus // Usa o Enum definido abaixo
+  createdAt  DateTime    @default(now())
+  items      OrderItem[] // <== RELAÇÃO: Um pedido tem MUITOS itens
+}
+
+model OrderItem {
+  id        String @id @default(auto()) @map("_id") @db.ObjectId
+  orderId   String @db.ObjectId
+  productId String // ID do produto (do product-service)
+  quantity  Int
+  price     Float  // Preço unitário no momento da compra
+  order     Order  @relation(fields: [orderId], references: [id]) // <== RELAÇÃO: O item pertence a UM pedido
+}
+
+// Enum para os status possíveis do pedido
+enum OrderStatus {
+  PENDENTE
+  AGUARDANDO_PAGAMENTO // Ou PAGO direto se preferir simplificar
+  PAGO
+  ENVIADO
+  ENTREGUE
+  CANCELADO
+}

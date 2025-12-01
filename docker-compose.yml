@@ -1,0 +1,187 @@
+version: '3.8'
+
+networks:
+  ecommerce-net:
+    driver: bridge
+
+services:
+  # =============================================
+  # INFRA: KONG API GATEWAY (DB-LESS)
+  # =============================================
+  kong:
+    image: kong:3.4
+    container_name: kong
+    volumes:
+      - ./kong.yml:/usr/local/kong/declarative/kong.yml
+    environment:
+      - KONG_DATABASE=off
+      - KONG_DECLARATIVE_CONFIG=/usr/local/kong/declarative/kong.yml
+      - KONG_PROXY_ACCESS_LOG=/dev/stdout
+      - KONG_ADMIN_ACCESS_LOG=/dev/stdout
+      - KONG_PROXY_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_ERROR_LOG=/dev/stderr
+      - KONG_ADMIN_LISTEN=0.0.0.0:8001, 0.0.0.0:8444 ssl
+      - KONG_ADMIN_GUI_URL=http://localhost:8002
+    ports:
+      - "8000:8000" # Gateway
+      - "8001:8001" # Admin API
+      - "8002:8002" # Kong Manager (UI)
+    networks:
+      - ecommerce-net
+
+  # =============================================
+  # INFRA: REDIS & UI
+  # =============================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis_cache
+    restart: always
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - ecommerce-net
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis_commander
+    ports:
+      - "8081:8081"
+    environment:
+      - REDIS_HOSTS=local:redis:6379
+    depends_on:
+      - redis
+    networks:
+      - ecommerce-net
+
+  # =============================================
+  # INFRA: MESSAGING (RABBITMQ)
+  # =============================================
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports: ["5672:5672", "15672:15672"]
+    environment:
+      - RABBITMQ_DEFAULT_USER=user
+      - RABBITMQ_DEFAULT_PASS=password
+    networks:
+      - ecommerce-net
+
+  # =============================================
+  # INFRA: STREAMING (KAFKA - WURSTMEISTER)
+  # =============================================
+  zookeeper:
+    image: wurstmeister/zookeeper
+    container_name: zookeeper
+    ports:
+      - "2181:2181"
+    networks:
+      - ecommerce-net
+
+  kafka:
+    image: wurstmeister/kafka:latest
+    container_name: kafka
+    ports:
+      - "9094:9094"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      # Configuração robusta para acesso interno e externo
+      KAFKA_LISTENERS: "INTERNAL://:9092,EXTERNAL://:9094"
+      KAFKA_ADVERTISED_LISTENERS: "INTERNAL://kafka:9092,EXTERNAL://localhost:9094"
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: "INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT"
+      KAFKA_INTER_BROKER_LISTENER_NAME: "INTERNAL"
+    depends_on:
+      - zookeeper
+    networks:
+      - ecommerce-net
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8080:8080"
+    environment:
+      - KAFKA_CLUSTERS_0_NAME=local
+      - KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS=kafka:9092
+      - KAFKA_CLUSTERS_0_ZOOKEEPER=zookeeper:2181
+      # Timeout aumentado para garantir conexão
+      - KAFKA_CLUSTERS_0_PROPERTIES_REQUEST_TIMEOUT_MS=30000
+    depends_on:
+      - kafka
+    networks:
+      - ecommerce-net
+
+  # =============================================
+  # MICROSSERVIÇOS (APIs)
+  # =============================================
+
+  users-service:
+    build: ./users-service
+    container_name: users_api
+    volumes: ["./users-service:/app", "/app/node_modules"]
+    depends_on:
+      - redis
+    environment:
+      - DATABASE_URL=mongodb+srv://application:01234@cluster0.qfmbljg.mongodb.net/users_db?appName=Cluster0
+      - REDIS_URL=redis://redis:6379
+    command: sh -c "npx prisma generate && npx prisma db push --accept-data-loss && npx nodemon server.js"
+    networks:
+      - ecommerce-net
+
+  products-service:
+    build: ./products-service
+    container_name: products_api
+    volumes: ["./products-service:/app", "/app/node_modules"]
+    depends_on:
+      - redis
+    environment:
+      - DATABASE_URL=mongodb+srv://application:01234@cluster0.qfmbljg.mongodb.net/products_db?appName=Cluster0
+      - REDIS_URL=redis://redis:6379
+    command: sh -c "npx prisma generate && npx prisma db push --accept-data-loss && npx nodemon server.js"
+    networks:
+      - ecommerce-net
+    
+  orders-service:
+    build: ./orders-service
+    container_name: orders_api
+    volumes: ["./orders-service:/app", "/app/node_modules"]
+    depends_on: [products-service, kafka, redis]
+    environment:
+      - DATABASE_URL=mongodb+srv://application:01234@cluster0.qfmbljg.mongodb.net/orders_db?appName=Cluster0
+      - PRODUCTS_SERVICE_URL=http://products-service:3002
+      - KAFKA_BROKER=kafka:9092
+      - REDIS_URL=redis://redis:6379
+    command: sh -c "npx prisma generate && npx prisma db push --accept-data-loss && npx nodemon server.js"
+    networks:
+      - ecommerce-net
+
+  payments-service:
+    build: ./payments-service
+    container_name: payments_api
+    volumes: ["./payments-service:/app", "/app/node_modules"]
+    depends_on: [kafka, rabbitmq, redis]
+    environment:
+      - DATABASE_URL=mongodb+srv://application:01234@cluster0.qfmbljg.mongodb.net/payments_db?appName=Cluster0
+      - ORDERS_SERVICE_URL=http://orders-service:3003
+      - RABBITMQ_URL=amqp://user:password@rabbitmq
+      - KAFKA_BROKER=kafka:9092
+      - REDIS_URL=redis://redis:6379
+    command: sh -c "npx prisma generate && npx prisma db push --accept-data-loss && npx nodemon server.js"
+    networks:
+      - ecommerce-net
+
+  notifications-service:
+    build: ./notifications-service
+    container_name: notifications_api
+    volumes: ["./notifications-service:/app", "/app/node_modules"]
+    depends_on: [rabbitmq]
+    environment:
+      - RABBITMQ_URL=amqp://user:password@rabbitmq
+    command: sh -c "node server.js"
+    networks:
+      - ecommerce-net
+
+volumes:
+  redis_data:
